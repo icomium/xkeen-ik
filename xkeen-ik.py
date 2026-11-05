@@ -4,7 +4,7 @@ import base64, copy, difflib, hashlib, hmac, io, ipaddress, json, os, re, secret
 import tarfile, tempfile, threading, time, urllib.parse, urllib.request, zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 REPO = "icomium/xkeen-ik"
 SKEEN_REPO = "jinndi/SKeen"
 CORE_REPO = "Leadaxe/sing-box-lx"
@@ -424,6 +424,46 @@ def compute():
     return cur, new, applied
 
 
+def fmt_val(v):
+    return ", ".join(str(x) for x in v) if isinstance(v, list) else str(v)
+
+
+def describe_rule(r):
+    skip = {"outbound", "action", "server", "method", "rewrite_ttl", "tag", "timeout", "race", "speculative",
+            "client_subnet", "udp_disable_domain_unmapping", "udp_connect", "type", "mode", "rules", "invert"}
+    if r.get("type") == "logical":
+        sep = " ИЛИ " if r.get("mode") == "or" else " И "
+        match = "(" + sep.join(describe_rule(x)[0] for x in r.get("rules", [])) + ")"
+    else:
+        parts = ["%s%s: %s" % ("НЕ " if (r.get("invert") and k == "query_type") else "", k, fmt_val(v)) for k, v in r.items() if k not in skip]
+        match = "; ".join(parts) or "любой трафик"
+    act = r.get("action", "")
+    if r.get("outbound"):
+        target = "→ " + r["outbound"]
+    elif act in ("reject", "drop"):
+        target = "отклонить" + (" (drop)" if r.get("method") == "drop" else "")
+    elif r.get("server") and act in ("", "route"):
+        target = "DNS: " + r["server"]
+    elif r.get("server"):
+        target = "%s → %s" % (act, r["server"])
+    else:
+        target = act or "-"
+    return match, target
+
+
+def preset_rules():
+    cur = read_config()
+    base = copy.deepcopy(cur)
+    strip_applied(base, STATE["applied"])
+    rt = base.get("route", {})
+    rs = []
+    for x in rt.get("rule_set", []):
+        rs.append({"tag": fmt_val(x.get("tag", "")), "url": x.get("url") or x.get("path") or ""})
+    mk = lambda lst: [dict(zip(("match", "target"), describe_rule(r))) for r in lst]
+    return {"route": mk(rt.get("rules", [])), "dns": mk(base.get("dns", {}).get("rules", [])),
+            "rule_sets": rs, "final": rt.get("final", "")}
+
+
 def dumps(c):
     return json.dumps(c, indent=2, ensure_ascii=False) + "\n"
 
@@ -839,6 +879,8 @@ def api(method, path, q, body, raw):
     with LOCK:
         if path == "state":
             return public_state()
+        if path == "presets":
+            return preset_rules()
         if path == "sub/add":
             url = (body.get("url") or "").strip()
             if not url.startswith(("http://", "https://")):
@@ -1085,16 +1127,16 @@ HTML = r"""<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="view
 <style>body{font:14px system-ui,sans-serif;margin:0;background:#14161a;color:#dcdfe4}header{display:flex;gap:6px;flex-wrap:wrap;padding:8px;background:#1d2026;position:sticky;top:0}
 button,input,select,textarea{background:#262a31;color:#dcdfe4;border:1px solid #3a3f48;border-radius:5px;padding:6px 9px;font:inherit}button{cursor:pointer}button.on{background:#2f6fed;border-color:#2f6fed}button.danger{border-color:#a33}
 main{padding:12px;max-width:980px;margin:auto}section{background:#1d2026;border-radius:8px;padding:12px;margin-bottom:12px}h3{margin:0 0 8px}table{width:100%;border-collapse:collapse}td,th{padding:5px;border-bottom:1px solid #2c3037;text-align:left;vertical-align:top}
-pre{background:#0d0e10;padding:8px;border-radius:6px;overflow:auto;max-height:420px;white-space:pre-wrap}.ok{color:#5c5}.bad{color:#e55}.mut{color:#8a909b}.row{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}input.w{flex:1;min-width:180px}</style>
+pre{background:#0d0e10;padding:8px;border-radius:6px;overflow:auto;max-height:420px;white-space:pre-wrap}.ok{color:#5c5}.bad{color:#e55}.mut{color:#8a909b}.row{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}input.w{flex:1;min-width:180px}details{margin:6px 0}summary{cursor:pointer;padding:4px 0}td{word-break:break-word}</style>
 <header id="tabs"></header><main id="m"></main>
 <script>
 const T=new URLSearchParams(location.search).get('token')||localStorage.xt||'';localStorage.xt=T;
 const $=(t,a,...c)=>{const e=document.createElement(t);for(const k in(a||{})){if(k.startsWith('on'))e[k]=a[k];else if(k==='cls')e.className=a[k];else e.setAttribute(k,a[k])}c.flat().forEach(x=>e.append(x instanceof Node?x:String(x??'')));return e};
 async function api(p,b){const r=await fetch('/api/'+p,{method:b===undefined?'GET':'POST',headers:{'X-Token':T,'Content-Type':'application/json'},body:b===undefined?undefined:JSON.stringify(b)});const j=await r.json().catch(()=>({error:'bad response'}));if(!r.ok)throw new Error(j.error||r.status);return j}
-let S={},tab='status',msg='';const TABS={status:'Статус',subs:'Подписки',rules:'Правила',apply:'Применение',upd:'Обновления',bk:'Бэкап и настройки'};
+let S={},P=null,tab='status',msg='';const TABS={status:'Статус',subs:'Подписки',rules:'Правила',apply:'Применение',upd:'Обновления',bk:'Бэкап и настройки'};
 const ts=t=>t?new Date(t*1000).toLocaleString():'—';
 async function act(fn){try{const r=await fn();msg=r&&(r.msg||r.error||(r.status?r.status+(r.error?': '+r.error:''):''))||'готово'}catch(e){msg='Ошибка: '+e.message}await load()}
-async function load(){try{S=await api('state')}catch(e){document.getElementById('m').replaceChildren($('section',0,'Ошибка: '+e.message+'. Откройте страницу как /?token=ВАШ_ТОКЕН'));return}render()}
+async function load(){try{S=await api('state')}catch(e){document.getElementById('m').replaceChildren($('section',0,'Ошибка: '+e.message+'. Откройте страницу как /?token=ВАШ_ТОКЕН'));return}try{P=await api('presets')}catch(e){P={error:e.message}}render()}
 function render(){const t=document.getElementById('tabs');t.replaceChildren(...Object.keys(TABS).map(k=>$('button',{cls:k==tab?'on':'',onclick:()=>{tab=k;render()}},TABS[k])),$('span',{cls:'mut'},'xkeen-ik '+S.version));
 const m=document.getElementById('m');m.replaceChildren(...(msg?[$('section',0,msg)]:[]),...({status,subs,rules,apply,upd,bk}[tab]()))}
 function status(){const u=S.updates||{};return[$('section',0,$('h3',0,'Состояние'),$('div',0,'SKeen: ',S.skeen.installed?S.skeen.version||'установлен':'НЕ установлен'),$('div',0,'sing-box-lx: ',S.core.version||'не установлен',S.core.xhttp?' (XHTTP ✓)':' (XHTTP ✗)',' — ',S.core.running?$('b',{cls:'ok'},'работает'):$('b',{cls:'bad'},'остановлен')),$('div',{cls:'mut'},'Архитектура: '+S.arch+', путь ядра: '+S.core.path),$('div',0,'Подписок: '+S.subs.length+', правил: '+S.rules.length)),
@@ -1105,10 +1147,17 @@ $('table',0,$('tr',0,...['Имя','Статус','Узлов','Проверка'
 return $('tr',0,$('td',0,s.name),$('td',0,$('b',{cls:s.status=='alive'?'ok':'bad'},s.status=='alive'?'жива':'недоступна'),s.error?$('div',{cls:'mut'},s.error):''),$('td',0,s.count??'—'),$('td',0,ts(s.last_check)),$('td',0,i),
 $('td',0,$('button',{onclick:()=>act(()=>api('sub/refresh',{id:s.id}))},'Обновить'),' ',$('button',{cls:'danger',onclick:()=>confirm('Удалить?')&&act(()=>api('sub/del',{id:s.id}))},'×')))})),
 $('p',{cls:'mut'},'Узлы попадают в группы sing-box (см. «Настройки»). После обновления подписки конфиг применяется автоматически (если включено).'))]}
+function presets(){const p=P||{};if(p.error||!p.route)return $('section',0,$('h3',0,'Предустановленные правила'),$('p',{cls:'mut'},p.error||'загрузка…'));
+const tbl=(rows)=>$('table',0,$('tr',0,$('th',0,'#'),$('th',0,'Условие'),$('th',0,'Действие')),...rows.map((r,i)=>$('tr',0,$('td',0,i+1),$('td',0,r.match),$('td',0,r.target))));
+return $('section',0,$('h3',0,'Предустановленные правила (из config.json, только чтение)'),
+$('p',{cls:'mut'},'Эти правила уже есть в конфиге. Свои правила вставляются выше них. Маршрут по умолчанию: '+(p.final||'—')),
+$('details',{open:''},$('summary',0,'Маршрутизация ('+p.route.length+')'),tbl(p.route)),
+$('details',0,$('summary',0,'DNS ('+p.dns.length+')'),tbl(p.dns)),
+$('details',0,$('summary',0,'Списки rule_set ('+p.rule_sets.length+')'),$('table',0,...p.rule_sets.map(x=>$('tr',0,$('td',0,x.tag),$('td',{cls:'mut'},x.url))))))}
 function rules(){const v=$('input',{cls:'w',placeholder:'example.com, full:www.example.com, keyword:foo, 1.2.3.0/24'}),a=$('select',0,$('option',{value:'direct'},'Напрямую'),$('option',{value:'vpn'},'Через VPN')),n=$('input',{placeholder:'заметка'});
 return[$('section',0,$('h3',0,'Свои правила (приоритет выше списков)'),$('div',{cls:'row'},v,a,n,$('button',{onclick:()=>act(()=>api('rule/add',{value:v.value,action:a.value,note:n.value}))},'Добавить')),
 $('table',0,...S.rules.map(r=>$('tr',0,$('td',0,r.value),$('td',0,r.action=='direct'?'Напрямую':'Через VPN'),$('td',{cls:'mut'},r.note),$('td',0,$('button',{onclick:()=>act(()=>api('rule/move',{id:r.id,dir:'up'}))},'↑'),$('button',{onclick:()=>act(()=>api('rule/move',{id:r.id,dir:'down'}))},'↓'),$('button',{cls:'danger',onclick:()=>act(()=>api('rule/del',{id:r.id}))},'×'))))),
-$('p',{cls:'mut'},'Домен без префикса = сам домен и все поддомены. Правила вступают в силу после «Применить».'))]}
+$('p',{cls:'mut'},'Домен без префикса = сам домен и все поддомены. Правила вступают в силу после «Применить».')),presets()]}
 function apply(){const pre=$('pre',0,'Нажмите «Показать изменения»');return[$('section',0,$('h3',0,'Безопасное применение'),$('p',{cls:'mut'},'preview → sing-box check → бэкап → атомарная запись → перезагрузка → откат при ошибке'),
 $('div',{cls:'row'},$('button',{onclick:async()=>{try{const r=await api('preview',{});pre.textContent=r.changed?r.diff:'Изменений нет'}catch(e){pre.textContent=e.message}}},'Показать изменения'),$('button',{cls:'on',onclick:()=>act(()=>api('apply',{}))},'Применить')),pre)]}
 function upd(){const u=S.updates||{};const row=(k,n)=>{const x=u[k]||{};return $('tr',0,$('td',0,n),$('td',0,x.current||'—'),$('td',0,x.latest||'—'),$('td',0,x.error?$('span',{cls:'bad'},x.error):x.available?$('b',{cls:'ok'},'есть обновление'):'актуально'),$('td',0,k=='self'?[$('button',{onclick:()=>act(()=>api('update/run',{what:k,channel:'release'}))},'из релиза'),' ',$('button',{onclick:()=>act(()=>api('update/run',{what:k,channel:'main'}))},'из main')]:$('button',{onclick:()=>act(()=>api('update/run',{what:k}))},'Обновить')))};

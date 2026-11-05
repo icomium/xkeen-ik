@@ -21,7 +21,7 @@ python3 -c "$CHECK" 2>/dev/null || { opkg install python3-openssl python3-codecs
 python3 -c "$CHECK" || { echo "В Python не хватает модулей (ssl/zipfile). Установите полный пакет: opkg install python3"; exit 1; }
 
 echo "== 2/4 Панель xkeen-ik"
-mkdir -p "$DIR"
+mkdir -p "$DIR" /opt/var/log /opt/var/run
 curl -fsSL "https://raw.githubusercontent.com/$REPO/$BRANCH/xkeen-ik.py" -o "$DIR/xkeen-ik.py.new"
 python3 -c "import sys; compile(open(sys.argv[1]).read(), 'x', 'exec')" "$DIR/xkeen-ik.py.new"
 mv "$DIR/xkeen-ik.py.new" "$DIR/xkeen-ik.py"
@@ -37,6 +37,9 @@ fi
 
 echo "== 4/4 Ядро sing-box-lx, настройка SKeen, автозапуск"
 python3 "$DIR/xkeen-ik.py" setup | tee /tmp/xik-setup.log
+# В BusyBox на Keenetic нет nohup: убираем его из сгенерированного скрипта автозапуска
+sed -i 's|^    nohup |    |; s|2>&1 &|2>\&1 </dev/null \&|' /opt/etc/init.d/S98xkeen-ik
+ln -sf /opt/etc/init.d/S98xkeen-ik /opt/bin/xkeen-ik
 /opt/etc/init.d/S98xkeen-ik restart
 
 IP=$(ip -4 addr show br0 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | head -n1)
@@ -44,3 +47,4 @@ TOKEN=$(sed -n 's/^TOKEN=//p' /tmp/xik-setup.log | head -n1)
 rm -f /tmp/xik-setup.log
 echo
 echo "Готово. Панель: http://${IP:-ROUTER_IP}:8090/?token=${TOKEN}"
+echo "Управление: xkeen-ik {start|stop|restart|status}"

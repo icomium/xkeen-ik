@@ -4,7 +4,7 @@ import base64, copy, difflib, hashlib, hmac, io, ipaddress, json, os, re, secret
 import tarfile, tempfile, threading, time, urllib.parse, urllib.request, zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 REPO = "icomium/xkeen-ik"
 SKEEN_REPO = "jinndi/SKeen"
 CORE_REPO = "Leadaxe/sing-box-lx"
@@ -13,6 +13,7 @@ SKEEN_DIR = os.environ.get("XIK_SKEEN_DIR", "/opt/etc/skeen")
 SKEEN_BIN = os.environ.get("XIK_SKEEN_BIN", "/opt/bin/skeen")
 CORE = os.environ.get("XIK_CORE", "/opt/bin/sing-box-lx")
 INIT_PATH = os.environ.get("XIK_INIT", "/opt/etc/init.d/S98xkeen-ik")
+BIN_LINK = os.environ.get("XIK_BIN", "/opt/bin/xkeen-ik")
 SELF_PATH = os.path.abspath(__file__)
 CONFIG = os.path.join(SKEEN_DIR, "config.json")
 SKEEN_JSON = os.path.join(SKEEN_DIR, "skeen.json")
@@ -1019,18 +1020,32 @@ case "$1" in
   start)
     running && { echo "xkeen-ik already running"; exit 0; }
     [ -f "$LOG" ] && [ "$(wc -c < $LOG)" -gt 1048576 ] && : > "$LOG"
-    nohup "$PY" "$APP" serve >> "$LOG" 2>&1 &
+    "$PY" "$APP" serve >> "$LOG" 2>&1 </dev/null &
     echo $! > "$PID"; echo "xkeen-ik started" ;;
   stop) running && kill "$(cat $PID)"; rm -f "$PID"; echo "xkeen-ik stopped" ;;
   restart) "$0" stop; sleep 1; "$0" start ;;
   status) running && echo running || { echo stopped; exit 1; } ;;
-  *) echo "usage: $0 {start|stop|restart|status}"; exit 1 ;;
+  url) "$PY" "$APP" url ;;
+  *) echo "usage: $0 {start|stop|restart|status|url}"; exit 1 ;;
 esac
 """ % SELF_PATH
 
 
+def lan_ip():
+    rc, out = run(["ip", "-4", "addr", "show", "br0"], 10)
+    m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", out)
+    return m.group(1) if m else "ROUTER_IP"
+
+
+def show_url():
+    load_state()
+    print("http://%s:%s/?token=%s" % (lan_ip(), S("port"), S("token")))
+
+
 def setup():
     os.makedirs(BACKUPS, exist_ok=True)
+    os.makedirs("/opt/var/log", exist_ok=True)
+    os.makedirs("/opt/var/run", exist_ok=True)
     load_state()
     try:
         print("skeen.json: %s" % ("изменён (внутреннее управление SKeen отключено)" if skeen_tune() else "уже настроен"))
@@ -1046,6 +1061,13 @@ def setup():
         print("ядро уже есть:", core_info())
     atomic_write(INIT_PATH, INIT_SCRIPT, 0o755)
     print("автозапуск:", INIT_PATH)
+    try:
+        if os.path.lexists(BIN_LINK):
+            os.remove(BIN_LINK)
+        os.symlink(INIT_PATH, BIN_LINK)
+        print("команда: xkeen-ik {start|stop|restart|status|url}")
+    except OSError as e:
+        print("ВНИМАНИЕ: не удалось создать %s (%s)" % (BIN_LINK, e))
     print("TOKEN=" + S("token"))
 
 
@@ -1101,7 +1123,7 @@ $('section',0,$('h3',0,'Бэкапы'),$('table',0,...S.backups.slice(0,15).map(
 $('section',0,$('h3',0,'Настройки'),$('div',{cls:'row'},px,$('button',{onclick:()=>act(()=>api('settings',{proxy:px.value}))},'Сохранить')),
 $('label',0,$('input',{type:'checkbox',...(st.auto_apply?{checked:''}:{}),onchange:e=>act(()=>api('settings',{auto_apply:e.target.checked}))}),' применять конфиг автоматически после обновления подписки'),
 $('div',{cls:'row'},$('label',0,$('input',{type:'checkbox',...(st.auto_update.core?{checked:''}:{}),onchange:e=>act(()=>api('settings',{auto_update:{...st.auto_update,core:e.target.checked}}))}),' авто-обновление ядра'),$('label',0,$('input',{type:'checkbox',...(st.auto_update.skeen?{checked:''}:{}),onchange:e=>act(()=>api('settings',{auto_update:{...st.auto_update,skeen:e.target.checked}}))}),' авто-обновление SKeen')),
-$('div',{cls:'row'},$('button',{onclick:()=>act(()=>api('skeen/tune',{}))},'Отключить штатное управление SKeen (повторно)'))))]}
+$('div',{cls:'row'},$('button',{onclick:()=>act(()=>api('skeen/tune',{}))},'Отключить штатное управление SKeen (повторно)')))]}
 load();setInterval(()=>{if(S.task&&S.task.running)load()},3000);
 </script></html>"""
 
@@ -1111,5 +1133,7 @@ if __name__ == "__main__":
         setup()
     elif cmd == "serve":
         serve()
+    elif cmd == "url":
+        show_url()
     else:
-        print("usage: xkeen-ik.py [setup|serve]")
+        print("usage: xkeen-ik.py [setup|serve|url]")

@@ -36,15 +36,9 @@ else
 fi
 
 echo "== 4/4 Ядро sing-box-lx, настройка SKeen, автозапуск"
-python3 "$DIR/xkeen-ik.py" setup | tee /tmp/xik-setup.log
-# В BusyBox на Keenetic нет nohup: убираем его из сгенерированного скрипта автозапуска
-sed -i 's|^    nohup |    |; s|2>&1 &|2>\&1 </dev/null \&|' /opt/etc/init.d/S98xkeen-ik
-ln -sf /opt/etc/init.d/S98xkeen-ik /opt/bin/xkeen-ik
+python3 "$DIR/xkeen-ik.py" setup
 /opt/etc/init.d/S98xkeen-ik restart
 
-IP=$(ip -4 addr show br0 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | head -n1)
-TOKEN=$(sed -n 's/^TOKEN=//p' /tmp/xik-setup.log | head -n1)
-rm -f /tmp/xik-setup.log
 echo
-echo "Готово. Панель: http://${IP:-ROUTER_IP}:8090/?token=${TOKEN}"
-echo "Управление: xkeen-ik {start|stop|restart|status}"
+echo "Готово. Панель: $(python3 "$DIR/xkeen-ik.py" url)"
+echo "Управление: xkeen-ik {start|stop|restart|status|url}"

@@ -1,2 +1,42 @@
 # xkeen-ik
-Web panel for Keenetic: SKeen + sing-box-lx (XHTTP), 3x-ui subscriptions, custom routing rules
+
+Веб-панель для роутеров Keenetic (Entware), которая ставит и ведёт связку **[SKeen](https://github.com/jinndi/SKeen) + [sing-box-lx](https://github.com/Leadaxe/sing-box-lx)** (ядро с поддержкой XHTTP).
+
+## Установка одной командой
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/icomium/xkeen-ik/main/install.sh | sh
+```
+
+Нужны Entware на USB (ext4) и компонент «Модули ядра Netfilter». В конце скрипт напечатает адрес `http://ROUTER_IP:8090/?token=...`.
+
+Во время установки SKeen спросит про sing-box — выберите «пропустить».
+
+## Что делает
+
+| # | Возможность | Как |
+|---|---|---|
+| 1 | Ставит себя | `install.sh` кладёт `xkeen-ik.py` в `/opt/etc/xkeen-ik/` |
+| 2 | SKeen без ядра | официальный установщик SKeen, шаг sing-box пропускается |
+| 3 | sing-box-lx с XHTTP | релиз Leadaxe/sing-box-lx под архитектуру роутера, проверка SHA256 и `with_xhttp` |
+| 4 | Отключает штатное управление SKeen | в `skeen.json`: `services.api` выключен, `update.*.enabled=0`, `singbox.external` -> наше ядро |
+| 5, 12 | Раздельные обновления | SKeen и ядро проверяются и ставятся независимо, ядро SKeen не трогает |
+| 6 | Самообновление | из последнего релиза или из `main` |
+| 7, 8 | Подписки 3x-ui | vless (в т.ч. XHTTP/REALITY), vmess, trojan, shadowsocks; проверка живости, интервал и ручное обновление |
+| 9, 10 | Свои правила | домен / `full:` / `keyword:` / IP / CIDR -> «Напрямую» или «Через VPN»; вставляются выше списков |
+| 11 | Автозапуск | `/opt/etc/init.d/S98xkeen-ik` |
+| 13 | Безопасное применение | preview (diff) -> `sing-box check` -> бэкап -> атомарная запись -> перезагрузка -> откат при сбое |
+| 14 | Экспорт/импорт | `skeen.json`, `config.json`, ZIP |
+| 15 | Интерфейс | `http://ROUTER_IP:8090/?token=YOUR_TOKEN` |
+
+## Как правила встраиваются в config.json
+
+Панель не пересоздаёт конфиг, а правит его: добавляет узлы `xik·*` в группы (`groups` в настройках, по умолчанию `🌍 Auto` и `🌍 Proxy` из шаблона SKeen), убирает заглушку `🔒 TROYAN` и вставляет свои правила перед первым правилом с `rule_set` (route) и перед первым правилом со списком (dns). Для доменов добавляются и DNS-правила (`dns_direct` / `dns_fakeip`).
+
+## Ограничения (v0.1)
+
+- Проверено на моках; на реальном Keenetic не запускалось. Поведение интерактивных установщиков SKeen не проверено.
+- Обновление SKeen идёт повторным запуском официального установщика.
+- Поддерживаются обычные (base64) подписки 3x-ui, JSON-подписки нет. Поле `extra` XHTTP не переносится.
+- Python-панель потребляет больше памяти, чем Lua-API SKeen.
+- Токен передаётся по HTTP в локальной сети; не публикуйте порт 8090 в интернет.

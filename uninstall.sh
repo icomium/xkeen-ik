@@ -132,10 +132,12 @@ fi
 step "1. Интерфейсы OpkgTun, созданные SKeen"
 if [ -x "$R/opt/bin/skeen" ] && [ -z "$R" ]; then
   TUNS=$("$R/opt/bin/skeen" tun list 2>/dev/null)
-  if [ -n "$TUNS" ]; then
+  if [ -n "$TUNS" ] && ! printf '%s' "$TUNS" | grep -qiE 'ERROR|Команда только для терминала'; then
     warn "SKeen создал OpkgTun-интерфейсы. Они не удаляются автоматически:"
     printf '%s\n' "$TUNS" | sed 's/^/         /'
     say "         Удалите нужные командой:  skeen tun delete <имя>  (до удаления SKeen)"
+  elif printf '%s' "$TUNS" | grep -qiE 'ERROR|Команда только для терминала'; then
+    info "skeen tun list требует интерактивный терминал; проверьте вручную: skeen tun list"
   else
     ok "OpkgTun-интерфейсов нет"
   fi
